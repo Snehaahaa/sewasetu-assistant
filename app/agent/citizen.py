@@ -245,6 +245,8 @@ def update_draft(claims, args):
             v = (v or "").strip()
             if k == "dob":
                 v = _norm_dob(v)
+                if data.get("dob") and data["dob"] != v:           # keep a trace: a birth date changed mid-draft
+                    data["_dob_history"] = (data.get("_dob_history") or []) + [data["dob"]]
             elif k == "ifsc":
                 v = re.sub(r"[\s-]", "", v).upper()
             elif k == "bank_account":
@@ -360,6 +362,11 @@ def submit_application(claims, args):
             raise ToolError("The age proof file is missing. Ask her to upload it again.")
         res = portal.submit_application(cur, mobile, data, doc)
         if res["outcome"] == "created":
+            earlier_young = [h for h in (data.get("_dob_history") or [])
+                             if portal.parse_dob(h) and portal.age_on(portal.parse_dob(h), portal.now_ist().date()) < portal.MIN_AGE]
+            if earlier_young:        # the portal cannot know the true date; it can make sure the officer sees this
+                cur.execute("UPDATE audit_log SET note = %s WHERE application_id = %s AND action = 'SUBMIT'",
+                            ("DOB_REVISED_AFTER_INELIGIBLE: draft first said %s (below 60), then changed" % ", ".join(earlier_young), res["id"]))
             cur.execute("DELETE FROM agent_drafts WHERE mobile = %s", (mobile,))   # keep the file: the application owns it
             conn.commit()
         else:

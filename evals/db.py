@@ -44,7 +44,8 @@ def apps_for(mobile):
 def insert_application(mobile, name, dob, village="Lakhipur", block="Sonari", status="PENDING", bank="111122223333",
                        ifsc="SBIN0003077", doc="/tmp/ssp-uploads/fixture.png", submitted="now()", gender="Female",
                        marital="Widowed", decided_by=""):
-    no = "SSP26" + str(abs(hash(mobile + name)) % 900000 + 100000)
+    import random
+    no = "SSX%08d" % random.randint(0, 99999999)          # own prefix: can never collide with a real SSP number
     run("INSERT INTO applications (application_no,applicant_name,mobile,dob,gender,marital_status,village,block,"
         "bank_account,ifsc,doc_path,status,submitted_at) VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s',%s)"
         % (no, esc(name), mobile, dob, gender, marital, esc(village), block, bank, ifsc, doc, status, submitted))

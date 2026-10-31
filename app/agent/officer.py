@@ -32,6 +32,7 @@ FLAG_TEXT = {
     "DUPLICATE_PERSON": "Another live application has the same name, date of birth and village under a different mobile.",
     "SHARED_BANK_ACCOUNT": "Same bank account appears on another live application (could be a joint account, or misuse).",
     "IFSC_FORMAT": "IFSC is not in the standard 11-character format.",
+    "DOB_REVISED_AFTER_INELIGIBLE": "While filling the form the date of birth was first below 60 and was then changed. Check the age proof carefully.",
     "DOCUMENT_FILE_MISSING": "A document is recorded but the file cannot be found.",
 }
 STATUSES = ["PENDING", "APPROVED", "DEEMED_APPROVED", "REJECTED", "WITHDRAWN"]
@@ -72,6 +73,8 @@ def _flags(row, shared_bank, dup_person):
         f.append("DUPLICATE_PERSON")
     if shared_bank:
         f.append("SHARED_BANK_ACCOUNT")
+    if row.get("dob_revised"):
+        f.append("DOB_REVISED_AFTER_INELIGIBLE")
     import re
     if not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", (row["ifsc"] or "")):
         f.append("IFSC_FORMAT")
@@ -91,11 +94,12 @@ _SEL = ("SELECT a.id, a.application_no, a.applicant_name, a.mobile, a.dob, a.gen
         "   AND b.status IN %s) AS shared_bank, "
         "(SELECT count(*) FROM applications b WHERE b.mobile <> a.mobile AND b.status IN %s "
         "   AND lower(trim(b.applicant_name)) = lower(trim(a.applicant_name)) AND b.dob = a.dob "
-        "   AND lower(trim(b.village)) = lower(trim(a.village))) AS dup_person "
+        "   AND lower(trim(b.village)) = lower(trim(a.village))) AS dup_person, "
+        "(SELECT count(*) FROM audit_log l WHERE l.application_id = a.id AND l.note LIKE 'DOB_REVISED_AFTER_INELIGIBLE%%') AS dob_revised "
         "FROM applications a ")
 _COLS = ["id", "application_no", "applicant_name", "mobile", "dob", "gender", "marital_status", "husband_name",
          "village", "block", "bank_account", "ifsc", "doc_path", "status", "submitted_at", "decided_at",
-         "decided_by", "shared_bank", "dup_person"]
+         "decided_by", "shared_bank", "dup_person", "dob_revised"]
 
 
 def _rows(cur, where, params, order="a.submitted_at ASC", limit=15, offset=0):

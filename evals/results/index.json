@@ -1,0 +1,36 @@
+[
+ {
+  "id": "20261031-044444",
+  "label": "Layer 1, first run (before any fixes from evals)",
+  "model": "scripted",
+  "mode": "scripted",
+  "commit": "3d4a5db",
+  "started": "2026-10-31T04:44:44",
+  "summary": {
+   "personas": 17,
+   "passed": 14,
+   "errors": 1,
+   "db_checks": 33,
+   "db_checks_passed": 31,
+   "replies_ok": 16
+  },
+  "file": "run-20261031-044444.json"
+ },
+ {
+  "id": "20261031-093856",
+  "label": "Layer 1, run 2 (after DOB-revision flag + harness fixes)",
+  "model": "scripted",
+  "mode": "scripted",
+  "commit": "3d4a5db",
+  "started": "2026-10-31T09:38:56",
+  "summary": {
+   "personas": 17,
+   "passed": 17,
+   "errors": 0,
+   "db_checks": 34,
+   "db_checks_passed": 34,
+   "replies_ok": 17
+  },
+  "file": "run-20261031-093856.json"
+ }
+]
