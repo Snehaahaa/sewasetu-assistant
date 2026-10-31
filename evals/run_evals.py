@@ -204,8 +204,11 @@ def main():
     ap.add_argument("--label", default="")
     ap.add_argument("--notes", default="")
     ap.add_argument("--no-clean-each", action="store_true")
+    ap.add_argument("--cleanup-only", action="store_true", help="delete all eval test rows (mobiles 99001xxxxx / 99002xxxxx) and exit")
     ap.add_argument("--final-cleanup", action="store_true", help="remove all test rows afterwards (do this on the live VM)")
     a = ap.parse_args()
+    if a.cleanup_only:
+        cleanup(); print("eval test rows removed"); return
     only = set(filter(None, a.only.split(",")))
     run = {"id": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), "label": a.label, "notes": a.notes, "model": a.model if a.mode == "llm" else "scripted", "mode": a.mode,
            "started": datetime.datetime.now().isoformat(timespec="seconds"), "portal": a.portal, "personas": []}
