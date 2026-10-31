@@ -808,6 +808,34 @@ def admin_document(app_id):
     return send_file(row[0])
 
 
+# ---------------------------------------------------------------------------
+# Eval dashboard: the invented people, the conversations, what was checked in this database, what passed.
+# Public and read-only; everything on it is synthetic (test mobiles 99001xxxxx / 99002xxxxx).
+# ---------------------------------------------------------------------------
+
+@app.route("/eval-dashboard")
+def eval_dashboard():
+    import json as _json
+    root = os.environ.get("EVAL_RESULTS_DIR") or os.path.join(BASE_DIR, "evals_results")
+
+    def _load(name, default):
+        try:
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
+                return _json.load(fh)
+        except Exception:
+            return default
+
+    index = _load("index.json", [])
+    wanted = request.args.get("run")
+    chosen = next((r for r in index if r["id"] == wanted), None)
+    if chosen is None and index:
+        llm = [r for r in index if r.get("mode") == "llm"]
+        chosen = (llm or index)[-1]
+    run = _load(chosen["file"], None) if chosen else None
+    return render_template("eval_dashboard.html", index=index, run=run, findings=_load("findings.json", []),
+                           design=_load("design_note.json", None))
+
+
 from oauth import oauth as _oauth_blueprint   # noqa: E402  (needs the definitions above)
 app.register_blueprint(_oauth_blueprint)
 

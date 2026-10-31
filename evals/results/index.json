@@ -32,5 +32,22 @@
    "replies_ok": 17
   },
   "file": "run-20261031-093856.json"
+ },
+ {
+  "id": "20261031-095133",
+  "label": "Layer 2, run 1: real Claude Code client, small model (Haiku), first version of tool descriptions",
+  "model": "haiku",
+  "mode": "llm",
+  "commit": "8958ecc",
+  "started": "2026-10-31T09:51:33",
+  "summary": {
+   "personas": 17,
+   "passed": 13,
+   "errors": 0,
+   "db_checks": 34,
+   "db_checks_passed": 22,
+   "replies_ok": 16
+  },
+  "file": "run-20261031-095133.json"
  }
 ]

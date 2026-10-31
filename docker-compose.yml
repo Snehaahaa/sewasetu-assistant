@@ -12,9 +12,11 @@ services:
 
   app:
     build: ./app
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
+      SCHEME_DEADLINE: ${SCHEME_DEADLINE:-}      # empty = value in config/app.ini; set to extend the application window
+      EVAL_RESULTS_DIR: /evals/results
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-before-deploying}
       # the address at which people reach this portal; stamped into sign-in tokens and
@@ -26,6 +28,54 @@ services:
     volumes:
       - uploads:/var/sewasetu/uploads
       - applogs:/var/log/sewasetu
+      - ./evals:/evals:ro
+
+  # --- the two assistants (MCP servers over streamable HTTP). Same image and code as the portal, separate
+  # processes with separate tool lists; they reach the portal's rules and database through its own functions.
+  mcp-citizen:
+    build: ./app
+    command: ["gunicorn", "--bind", "0.0.0.0:8001", "--workers", "3", "--timeout", "60", "agent.citizen:app"]
+    expose:
+      - "8001"
+    environment: &mcpenv
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      PORTAL_INTERNAL_URL: http://app:8000
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-before-deploying}
+      SCHEME_DEADLINE: ${SCHEME_DEADLINE:-}
+    depends_on:
+      - db
+      - app
+    volumes:
+      - uploads:/var/sewasetu/uploads
+
+  mcp-officer:
+    build: ./app
+    command: ["gunicorn", "--bind", "0.0.0.0:8002", "--workers", "2", "--timeout", "60", "agent.officer:app"]
+    expose:
+      - "8002"
+    environment: *mcpenv
+    depends_on:
+      - db
+      - app
+    volumes:
+      - uploads:/var/sewasetu/uploads
+
+  # --- public HTTPS front door
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - app
+      - mcp-citizen
+      - mcp-officer
 
   scheduler:
     build: ./app
@@ -45,6 +95,7 @@ services:
       - "8025"
 
 volumes:
+  caddy_data:
   pgdata:
   uploads:
   applogs:

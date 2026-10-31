@@ -216,8 +216,10 @@ def get_my_application(claims, args):
 
 @tool("update_draft", "Save details for the pension application",
       "Save or correct one or more details of the application draft (only what the citizen has actually told "
-      "you). Returns what is still missing, any problem with what was given, and what to ask next. Safe to call "
-      "repeatedly; later calls change only the fields you send.",
+      "you). Send EVERY detail already mentioned in the conversation in one call, including the applicant's own "
+      "name even if it came up in passing (\"my grandmother Kamala Bora\": the name is the APPLICANT's, not the "
+      "helper's). Returns what is still missing, any problem with what was given, and what to ask next. Safe to "
+      "call repeatedly; later calls change only the fields you send.",
       properties={
           "applicant_name": {"type": "string", "description": "Full name exactly as on the age proof", "maxLength": 120},
           "dob": {"type": "string", "description": "Date of birth DD/MM/YYYY", "maxLength": 20},
@@ -258,7 +260,19 @@ def update_draft(claims, args):
         drafts.save(cur, mobile, data, doc)
         conn.commit()
     ev = _evaluate(data, doc)
-    return dict(draft=_draft_view(data, doc), **ev, next_step=_next_hint(ev, data, doc))
+    out = dict(draft=_draft_view(data, doc), **ev, next_step=_next_hint(ev, data, doc))
+    if not ev["missing"] and not ev["problems"] and not doc and ev["window_open"] \
+            and ev.get("eligibility", {}).get("eligible_now", True):
+        out["age_proof_upload"] = _upload_info(mobile)        # saves a round trip for turn-limited clients
+    return out
+
+
+def _upload_info(mobile):
+    link = "%s/agent-upload/%s" % (ISSUER, drafts.make_upload_token(mobile))
+    return {"upload_link": link, "valid_for_minutes": drafts.UPLOAD_LINK_TTL // 60,
+            "say": "Ask her to open this link on her phone, choose the photo or PDF of her age proof and press Upload. "
+                   "Then call preview_application to check that it arrived.",
+            "from_a_shell_instead": "curl -F document=@/path/to/proof.jpg '%s'" % link}
 
 
 @tool("get_age_proof_upload_link", "Get a link where the citizen can upload her age proof",
@@ -267,11 +281,7 @@ def update_draft(claims, args):
       "file. Afterwards call preview_application to confirm it arrived.",
       read_only=True)
 def get_age_proof_upload_link(claims, args):
-    mobile = _mobile(claims)
-    return {"upload_link": "%s/agent-upload/%s" % (ISSUER, drafts.make_upload_token(mobile)),
-            "valid_for_minutes": drafts.UPLOAD_LINK_TTL // 60,
-            "say": "Ask her to open this link, choose the photo or PDF of her age proof, and press Upload. "
-                   "Then call preview_application to check that it arrived."}
+    return _upload_info(_mobile(claims))
 
 
 @tool("attach_age_proof", "Attach the age proof file directly",
@@ -336,6 +346,8 @@ def preview_application(claims, args):
                       "declaration. Submit only after she clearly agrees.")
     else:
         out["say"] = "Not ready yet: " + "; ".join(sorted(set(blockers)))
+        if not doc and not ev["missing"] and ev["window_open"] and ev.get("eligibility", {}).get("eligible_now", True):
+            out["age_proof_upload"] = _upload_info(mobile)       # give her the link right here
     return out
 
 

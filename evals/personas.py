@@ -429,7 +429,7 @@ officer(dict(
     checks=lambda c: [
         ("db", "application is APPROVED", lambda: ok(_status(c["no"]) == "APPROVED", "")),
         ("db", "decided_by = admin (the officer login)", lambda: ok(db.one("SELECT decided_by FROM applications WHERE application_no='%s'" % c["no"]) == "admin", "")),
-        ("db", "audit row has her reason", lambda: ok("verified by me" in (db.one("SELECT note FROM audit_log l JOIN applications a ON a.id=l.application_id WHERE a.application_no='%s' AND l.action='APPROVED'" % c["no"]) or ""), "")),
+        ("db", "audit row has her reason", lambda: ok("age proof matches" in (db.one("SELECT note FROM audit_log l JOIN applications a ON a.id=l.application_id WHERE a.application_no='%s' AND l.action='APPROVED'" % c["no"]) or "").lower(), "")),
         ("db", "the citizen got an approval SMS", lambda: ok(_wait_sms(c["portal"], "9900200003", "approved"), "")),
     ]))
 

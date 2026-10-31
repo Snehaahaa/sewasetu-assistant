@@ -7,7 +7,7 @@ export PYTHONPATH=$R/devshim DB_HOST=${DB_HOST:-/tmp} DB_PORT=${DB_PORT:-5433} S
   SCHEME_DEADLINE=${SCHEME_DEADLINE:-2027-12-31 23:59} PORTAL_INTERNAL_URL=http://localhost:8000 \
   CITIZEN_MCP_URL=http://localhost:8001/citizen/mcp OFFICER_MCP_URL=http://localhost:8002/officer/mcp
 mkdir -p /tmp/ssp-uploads /tmp/ssp-logs
-stop() { [ -f $PIDS ] && xargs -r kill < $PIDS 2>/dev/null; rm -f $PIDS; sleep 1; }
+stop() { [ -f $PIDS ] && xargs -r kill < $PIDS 2>/dev/null; rm -f $PIDS; for p in 8000 8001 8002 8025; do fuser -k $p/tcp >/dev/null 2>&1; done; sleep 1; }
 start() {
   : > $PIDS
   (cd $R/smsgw && nohup python3 -c "import app;app.app.run(port=8025,threaded=True)" >/tmp/ssp-logs/sms.log 2>&1 & echo $! >> $PIDS)

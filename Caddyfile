@@ -1,0 +1,17 @@
+# One public HTTPS address. The portal stays at /, each assistant is its own service on its own path.
+# Set SITE_ADDRESS to the public hostname (e.g. sewasetu.example.in) for automatic Let's Encrypt HTTPS,
+# or to ":80" to run plain HTTP behind another proxy.
+{$SITE_ADDRESS::80} {
+	encode gzip
+	@citizen path /citizen/mcp /.well-known/oauth-protected-resource/citizen/mcp
+	handle @citizen {
+		reverse_proxy mcp-citizen:8001
+	}
+	@officer path /officer/mcp /.well-known/oauth-protected-resource/officer/mcp
+	handle @officer {
+		reverse_proxy mcp-officer:8002
+	}
+	handle {
+		reverse_proxy app:8000
+	}
+}

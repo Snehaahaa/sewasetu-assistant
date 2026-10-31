@@ -23,7 +23,7 @@ def png_bytes(name="Sample Person", dob="01/01/1950"):
     d.text((70, 40), "BIRTH CERTIFICATE", fill="#3a2a10", font=f)
     d.text((40, 120), "Name:  %s" % name, fill="black", font=g)
     d.text((40, 170), "Date of birth:  %s" % dob, fill="black", font=g)
-    d.text((40, 260), "(test fixture - not a real document)", fill="#888", font=g)
+    d.text((40, 260), "Registrar of Births and Deaths, Purvanchal", fill="#555", font=g)
     b = io.BytesIO(); img.save(b, "PNG")
     return b.getvalue()
 
