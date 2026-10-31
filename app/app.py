@@ -46,14 +46,17 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 # WITHDRAWN and REJECTED applications do not block a fresh application.
 ACTIVE_STATUSES = ("PENDING", "APPROVED", "DEEMED_APPROVED")
 
-SMS_GATEWAY_URL = config.get("app", "sms_gateway_url")
+SMS_GATEWAY_URL = os.environ.get("SMS_GATEWAY_URL") or config.get("app", "sms_gateway_url")
 OTP_VALIDITY_SECONDS = config.getint("app", "otp_validity_seconds")
-UPLOAD_DIR = config.get("app", "upload_dir")
-SCHEME_DEADLINE = datetime.strptime(config.get("pension", "scheme_deadline"),
-                                    "%Y-%m-%d %H:%M")
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or config.get("app", "upload_dir")
+# The window can be overridden by the department without a code change (SCHEME_DEADLINE="YYYY-MM-DD HH:MM").
+SCHEME_DEADLINE = datetime.strptime(
+    os.environ.get("SCHEME_DEADLINE") or config.get("pension", "scheme_deadline"), "%Y-%m-%d %H:%M")
 MIN_AGE = config.getint("pension", "min_age")
 SLA_DAYS = config.getint("pension", "sla_days")
 
+GENDERS = ("Male", "Female", "Other")
+MARITAL = ("Married", "Unmarried", "Widowed")
 BLOCKS = ["Sonari", "Rajapara", "Dhemaji Pathar", "Borgaon", "Namti", "Khelua"]
 
 import logging
@@ -70,8 +73,8 @@ except Exception:
 
 def get_db():
     return psycopg2.connect(
-        host=config.get("database", "host"),
-        port=config.get("database", "port"),
+        host=os.environ.get("DB_HOST") or config.get("database", "host"),
+        port=os.environ.get("DB_PORT") or config.get("database", "port"),
         dbname=config.get("database", "name"),
         user=config.get("database", "user"),
         password=config.get("database", "password"),
@@ -105,8 +108,17 @@ def deadline_remaining():
     return int(delta.total_seconds() // 3600)
 
 
-def new_application_no():
-    return "SSP" + datetime.now().strftime("%y") + str(random.randint(100000, 999999))
+def new_application_no(cur=None):
+    """SSP + 2-digit year + 6 digits. With ~100k existing rows a bare random number collides
+    about one time in ten, and application_no has no unique constraint, so check first."""
+    for _ in range(50):
+        no = "SSP" + datetime.now().strftime("%y") + str(random.randint(100000, 999999))
+        if cur is None:
+            return no
+        cur.execute("SELECT 1 FROM applications WHERE application_no = %s", (no,))
+        if not cur.fetchone():
+            return no
+    raise RuntimeError("could not allocate an application number")
 
 
 def write_audit(cur, app_id, action, actor, note=""):
@@ -121,6 +133,13 @@ def write_audit(cur, app_id, action, actor, note=""):
 # import) MUST go through validate_application() and create_application() so
 # that no channel admits an application another channel would refuse.
 # ---------------------------------------------------------------------------
+
+def _chars_ok(text, extra):
+    """Letters of any script (including Assamese/Bengali vowel signs), plus the `extra` characters."""
+    import unicodedata
+    return all(ch.isalpha() or ch.isdigit() and "0" in extra or unicodedata.category(ch) in ("Mn", "Mc")
+               or ch in extra for ch in text)
+
 
 def parse_dob(raw):
     try:
@@ -153,8 +172,27 @@ def validate_application(data, doc_path):
         "doc_path": doc_path or "",
         "dob": None,
     }
+    # Closed vocabularies, matched case-insensitively (an assistant may say "female").
+    for key, allowed, label in (("gender", GENDERS, "gender"), ("marital_status", MARITAL, "marital status")):
+        match = next((a for a in allowed if a.lower() == cleaned[key].strip().lower()), None)
+        if match:
+            cleaned[key] = match
+        else:
+            errors.append("%s must be one of: %s" % (label, ", ".join(allowed)))
+    if len((data.get("applicant_name") or "").strip()) > 100:
+        errors.append("full name is longer than 100 characters")
+    if len(cleaned["village"]) > 100:
+        errors.append("village is longer than 100 characters")
+    if cleaned["husband_name"] and len(cleaned["husband_name"]) > 100:
+        errors.append("husband's name is longer than 100 characters")
+    if cleaned["applicant_name"] and not _chars_ok(cleaned["applicant_name"], " .'-"):
+        errors.append("full name may contain only letters, spaces, dots, apostrophes and hyphens")
+    if cleaned["husband_name"] and not _chars_ok(cleaned["husband_name"], " .'-"):
+        errors.append("husband's name may contain only letters, spaces, dots, apostrophes and hyphens")
+    if cleaned["village"] and not _chars_ok(cleaned["village"], " .,'-/()0123456789"):
+        errors.append("village contains characters that are not allowed")
     for label, key in (("full name", "applicant_name"), ("village", "village"),
-                       ("block", "block"), ("bank account", "bank_account")):
+                       ("block", "block"), ("bank account", "bank_account"), ("IFSC", "ifsc")):
         if not cleaned[key]:
             errors.append("%s is required" % label)
     if cleaned["block"] and cleaned["block"] not in BLOCKS:
@@ -168,6 +206,8 @@ def validate_application(data, doc_path):
         errors.append("date of birth must be given as DD/MM/YYYY")
     else:
         cleaned["dob"] = dob
+        if dob.year < 1900:
+            errors.append("date of birth year looks wrong; please check it")
         if age_on(dob, now_ist().date()) < MIN_AGE:
             errors.append("applicant must be %d years of age or above" % MIN_AGE)
     if not cleaned["doc_path"]:
@@ -190,7 +230,7 @@ def create_application(cur, mobile, cleaned):
 
     The caller commits. Returns (id, application_no).
     """
-    app_no = new_application_no()
+    app_no = new_application_no(cur)
     cur.execute(
         """INSERT INTO applications
            (application_no, applicant_name, mobile, dob, gender, marital_status,
@@ -212,6 +252,75 @@ def create_application(cur, mobile, cleaned):
                     (mobile, hash_password(portal_pass)))
     write_audit(cur, new_id, "SUBMIT", "applicant:%s" % mobile)
     return new_id, app_no
+
+
+def find_duplicate_person(cur, mobile, cleaned):
+    """Another live application for the same person under a different mobile number.
+
+    The one-application rule is keyed on the mobile, so a person could otherwise claim twice from
+    a relative's phone. Officers reject these as "duplicate of an earlier beneficiary record";
+    catching them at the door is what the counter would do. Same name + date of birth + village."""
+    cur.execute("SELECT application_no FROM applications WHERE mobile <> %s AND status IN %s "
+                "AND lower(regexp_replace(trim(applicant_name), '\\s+', ' ', 'g')) = %s "
+                "AND dob = %s AND lower(trim(village)) = %s LIMIT 1",
+                (mobile, ACTIVE_STATUSES, re.sub(r"\s+", " ", cleaned["applicant_name"]).lower(),
+                 cleaned["dob"], cleaned["village"].lower()))
+    return cur.fetchone()
+
+
+def submit_application(cur, mobile, data, doc_path):
+    """THE single entry point that turns a filled-in form into an application, for every channel
+    (web form, AI assistant). Validates, enforces one live application per mobile and per person,
+    and creates it. Serialised per mobile with an advisory lock so a double click or an agent
+    retry cannot create two. The caller commits.
+
+    Returns {"outcome": "created"|"invalid"|"exists"|"duplicate_person", ...}."""
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("ssp-apply:" + mobile,))
+    errors, cleaned = validate_application(data, doc_path)
+    if errors:
+        return {"outcome": "invalid", "errors": errors}
+    existing = active_application(cur, mobile)
+    if existing:
+        return {"outcome": "exists", "existing": existing}
+    if find_duplicate_person(cur, mobile, cleaned):
+        return {"outcome": "duplicate_person"}
+    new_id, app_no = create_application(cur, mobile, cleaned)
+    return {"outcome": "created", "id": new_id, "application_no": app_no, "cleaned": cleaned}
+
+
+def decide_application(cur, app_id, new_status, actor, note=""):
+    """Approve/reject a PENDING application and write the audit row. Returns application_no or None."""
+    cur.execute("UPDATE applications SET status = %s, decided_at = %s, decided_by = %s "
+                "WHERE id = %s AND status = 'PENDING' RETURNING application_no, mobile",
+                (new_status, datetime.now(), actor, app_id))
+    row = cur.fetchone()
+    if row:
+        write_audit(cur, app_id, new_status, "admin:%s" % actor, note)
+        return row
+    return None
+
+
+def notify_decision(mobile, app_no, new_status, note=""):
+    """Tell the citizen by SMS (called after the decision is committed, by every channel)."""
+    if new_status == "APPROVED":
+        text = "Sewa Setu: your pension application %s has been approved." % app_no
+    else:
+        text = "Sewa Setu: your pension application %s was not approved. Reason: %s. You may apply again or " \
+               "visit your block office." % (app_no, (note or "see the status portal")[:120])
+    send_sms(mobile, text)
+
+
+def withdraw_pending(cur, app_id, mobile):
+    """Applicant withdraws their own PENDING application. Returns application_no or None."""
+    cur.execute("UPDATE applications SET status = 'WITHDRAWN', decided_at = %s, "
+                "decided_by = 'APPLICANT' WHERE id = %s AND mobile = %s "
+                "AND status = 'PENDING' RETURNING application_no",
+                (datetime.now(), app_id, mobile))
+    row = cur.fetchone()
+    if row:
+        write_audit(cur, app_id, "WITHDRAW", "applicant:%s" % mobile)
+        return row[0]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -339,18 +448,11 @@ def upload():
         if f is None or f.filename == "":
             flash("Please choose a file to upload (JPG, PNG or PDF, up to 5 MB).")
             return render_template("upload.html")
-        filename = f.filename.lower()
-        content = f.read()
-        if not filename.rsplit(".", 1)[-1] in ("pdf", "jpg", "jpeg", "png"):
-            flash("Please upload a JPG, PNG or PDF file.")
+        from agent import drafts as _drafts
+        ok, msg, path = _drafts.save_age_proof(session["verified_mobile"], f.filename, f.read())
+        if not ok:
+            flash(msg)
             return render_template("upload.html")
-        if len(content) > 5 * 1024 * 1024:
-            flash("File is larger than 5 MB. Please upload a smaller file.")
-            return render_template("upload.html")
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        path = os.path.join(UPLOAD_DIR, "%s_%s" % (session["verified_mobile"], filename))
-        with open(path, "wb") as out:
-            out.write(content)
         session["doc_path"] = path
         return redirect(url_for("declaration"))
     return render_template("upload.html")
@@ -373,24 +475,26 @@ def declaration():
 def handle_submission():
     mobile = session.get("verified_mobile")
     data = session.get("form_data", {})
-    errors, cleaned = validate_application(data, session.get("doc_path", ""))
-    if errors:
-        flash("Please correct the following before submitting: " + "; ".join(errors) + ".")
-        return redirect(url_for("form_step", step=1))
-
     conn = get_db()
     cur = conn.cursor()
-    existing = active_application(cur, mobile)
-    if existing:
-        cur.close(); conn.close()
+    res = submit_application(cur, mobile, data, session.get("doc_path", ""))
+    if res["outcome"] == "created":
+        conn.commit()
+    cur.close(); conn.close()
+    if res["outcome"] == "invalid":
+        flash("Please correct the following before submitting: " + "; ".join(res["errors"]) + ".")
+        return redirect(url_for("form_step", step=1))
+    if res["outcome"] == "exists":
+        existing = res["existing"]
         flash("Application %s (%s) already exists for this mobile number. A pending "
               "application can be withdrawn from the status portal if you need to "
               "apply afresh." % (existing[1], existing[2]))
         return redirect(url_for("index"))
-
-    new_id, app_no = create_application(cur, mobile, cleaned)
-    conn.commit()
-    cur.close(); conn.close()
+    if res["outcome"] == "duplicate_person":
+        flash("Our records already show an application for these details. Please visit your "
+              "block office if you think this is a mistake.")
+        return redirect(url_for("index"))
+    new_id, app_no = res["id"], res["application_no"]
 
     session.pop("form_data", None)
     session.pop("doc_path", None)
@@ -495,15 +599,10 @@ def withdraw_application(app_id):
     mobile = session["portal_mobile"]
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = 'WITHDRAWN', decided_at = %s, "
-                "decided_by = 'APPLICANT' WHERE id = %s AND mobile = %s "
-                "AND status = 'PENDING' RETURNING application_no",
-                (datetime.now(), app_id, mobile))
-    row = cur.fetchone()
-    if row:
-        write_audit(cur, app_id, "WITHDRAW", "applicant:%s" % mobile)
+    app_no = withdraw_pending(cur, app_id, mobile)
+    if app_no:
         conn.commit()
-        flash("Application %s has been withdrawn. You may submit a new application." % row[0])
+        flash("Application %s has been withdrawn. You may submit a new application." % app_no)
     else:
         flash("Only a pending application can be withdrawn.")
     cur.close(); conn.close()
@@ -646,14 +745,11 @@ def _admin_decide(app_id, new_status, note):
     actor = session.get("admin_user", ADMIN_USERNAME)
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = %s, decided_at = %s, decided_by = %s "
-                "WHERE id = %s AND status = 'PENDING' RETURNING application_no",
-                (new_status, datetime.now(), actor, app_id))
-    row = cur.fetchone()
-    if row:
-        write_audit(cur, app_id, new_status, "admin:%s" % actor, note)
+    decided = decide_application(cur, app_id, new_status, actor, note)
+    if decided:
         conn.commit()
-        flash("Application %s %s." % (row[0], new_status.lower()))
+        notify_decision(decided[1], decided[0], new_status, note)
+        flash("Application %s %s." % (decided[0], new_status.lower()))
     else:
         flash("Only a pending application can be decided.")
     cur.close(); conn.close()
@@ -668,6 +764,48 @@ def admin_approve(app_id):
 @app.route("/admin/reject/<int:app_id>", methods=["POST"])
 def admin_reject(app_id):
     return _admin_decide(app_id, "REJECTED", request.form.get("note", ""))
+
+
+# ---------------------------------------------------------------------------
+# Age-proof upload link handed out by the citizen assistant, and officer document viewing
+# ---------------------------------------------------------------------------
+
+@app.route("/agent-upload/<token>", methods=["GET", "POST"])
+def agent_upload(token):
+    from agent import drafts as _drafts
+    mobile = _drafts.read_upload_token(token)
+    if not mobile:
+        return render_template("agent_upload.html", expired=True), 410
+    done = None
+    if request.method == "POST":
+        f = request.files.get("document")
+        if f is None or not f.filename:
+            flash("Please choose a photo or PDF of the age proof first.")
+        else:
+            ok, msg, path = _drafts.save_age_proof(mobile, f.filename, f.read())
+            if not ok:
+                flash(msg)
+            else:
+                conn = get_db(); cur = conn.cursor()
+                data, _ = _drafts.load(cur, mobile)
+                _drafts.save(cur, mobile, data, path)
+                conn.commit(); cur.close(); conn.close()
+                done = os.path.basename(path)
+    return render_template("agent_upload.html", expired=False, done=done)
+
+
+@app.route("/admin/document/<int:app_id>")
+def admin_document(app_id):
+    if not session.get("admin"):
+        return redirect(url_for("admin_login"))
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT doc_path FROM applications WHERE id = %s", (app_id,))
+    row = cur.fetchone(); cur.close(); conn.close()
+    root = os.path.realpath(UPLOAD_DIR)
+    if not row or not row[0] or not os.path.realpath(row[0]).startswith(root + os.sep) \
+            or not os.path.isfile(row[0]):
+        abort(404)
+    return send_file(row[0])
 
 
 from oauth import oauth as _oauth_blueprint   # noqa: E402  (needs the definitions above)

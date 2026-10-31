@@ -109,3 +109,13 @@ CREATE TABLE IF NOT EXISTS oauth_program_tokens (     -- admin-issued, long-live
     expires_at TIMESTAMP,
     revoked_at TIMESTAMP
 );
+
+-- Citizen assistant (MCP): application drafts, bound to the OTP-verified mobile, 24 h life
+CREATE TABLE IF NOT EXISTS agent_drafts (
+    mobile     VARCHAR(15) PRIMARY KEY,
+    data       JSONB,
+    doc_path   VARCHAR(200),
+    updated_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_app_bank ON applications(bank_account);
+CREATE INDEX IF NOT EXISTS idx_app_dob ON applications(dob);
