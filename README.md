@@ -91,9 +91,6 @@ As the project owner and lead developer, my contributions include:
 - Reviewing system behaviour, debugging and validating the implementation.
 - Preparing project documentation and deployment configuration.
 
-## AI Assistance Disclosure
-
-AI tools, including Claude, were used to assist with portions of code generation and modification, debugging, and development support. The project was reviewed and integrated as part of the overall implementation.
 
 ## Documentation
 
